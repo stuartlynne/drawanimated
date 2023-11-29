@@ -48,7 +48,7 @@ class DrawTimer:
 # The intent is to allow the GUI event loop to run between each call to draw_animated()
 # to reduce latency and improve responsiveness of the GUI.
 #
-def draw_animated(fig, flush_events=False, close=False, open=False, dprint=None):
+def draw_animated(fig, flush_events=False, close=False, open=False, dprint=None, xaxis_dynamic=False, yaxis_dynamic=False):
 
     # catch resize event, clear saved backgrounds, it is expected that matplotlib
     # will draw the entire figure after a resize event and we need to save the 
@@ -72,6 +72,7 @@ def draw_animated(fig, flush_events=False, close=False, open=False, dprint=None)
         return None, None
 
     if open:
+        print(f"draw_animated: open xaxis_dynamic: {xaxis_dynamic} yaxis_dynamic: {yaxis_dynamic}", file=sys.stderr)
         try:
             if fig._mpl_connect is not None:
                 fig.figure.canvas.mpl_disconnect(fig._mpl_connect)
@@ -84,21 +85,27 @@ def draw_animated(fig, flush_events=False, close=False, open=False, dprint=None)
         fig._draw_list = None
         fig._blitted = False
         fig._draw_reset = False
+        fig._xaxis_dynamic = xaxis_dynamic
+        fig._yaxis_dynamic = yaxis_dynamic
         return None, None
 
     if fig._draw_reset:
         fig._bg_static = None
         fig._draw_reset = False
 
-    # get the list of animated artists that are currently visible, this needs to be done
-    # each time because the list of artists can change dynamically
+    # Get the list of animated artists that are currently visible, this needs to be done
+    # each time because the list of artists can change dynamically. Effectively new artists
+    # are ignored until the next cycle of drawing is started, but removed artists are 
+    # immediately ignored.
+    # N.b. There may be other artists for other types of plots, this code works in my use case. 
+    # YMMV.
     static_dict = {}
     dynamic_dict = {}
     for axes in fig.get_children():
         if type(axes) is plt.Axes:
             for a in axes.get_children():
                 if a.get_animated() and a.get_visible():
-                    if type(a) is XAxis or type(a) is YAxis or type(a) is Legend or type(a) is Spine:
+                    if (type(a) is XAxis and not fig._xaxis_dynamic) or (type(a) is YAxis and not fig._yaxis_dynamic) or type(a) is Legend or type(a) is Spine:
                         static_dict[id(a)] = a
                     elif a in [axes.title, axes._left_title, axes._right_title,]:
                         static_dict[id(a)] = a
@@ -235,7 +242,9 @@ if __name__ == "__main__":
         leg.set_label('legend')
         legends[name] = leg
 
-    draw_animated(fig, open=True)
+    print('calling draw_animated open', file=sys.stderr)
+    draw_animated(fig, open=True, xaxis_dynamic=True, )
+
 
     # make sure our window is on the screen and drawn
     plt.show(block=False)
