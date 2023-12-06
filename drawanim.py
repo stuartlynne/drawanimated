@@ -14,6 +14,57 @@ from matplotlib.legend import Legend
 from matplotlib.spines import Spine
 import matplotlib 
 
+
+class DrawTimes:
+    def __init__(self,):
+        self._drawtimes = {}
+        self._drawcount = {}
+        self._drawlast = {}
+        self._drawtypes = {}
+        self.t0 = None
+        self.name = None
+        self.type = None
+
+    def __enter__(self):
+        self.t0 = perf_counter()
+        self.name = None
+        return self
+
+
+    def __exit__(self, type, value, traceback):
+        if self.name is None:
+            return
+        t1 = perf_counter()
+        self.elapsed = t1 - self.t0
+        if self.name not in self._drawtimes:
+            self._drawtimes[self.name] = self._drawlast[self.name] = 0. 
+            self._drawcount[self.name] = 0
+            self._drawtypes[self.name] = None
+        self._drawtimes[self.name] += self.elapsed
+        self._drawlast[self.name] = t1
+        self._drawcount[self.name] += 1
+        self._drawtypes[self.name] = self.type
+        
+    def print_summary(self,):
+        # show draw times
+        total_time = sum(self._drawtimes.values())
+        print('draw_animated total time: %7.2f' % (total_time), file=sys.stderr)
+        drawinfo = [(
+            self._drawtimes[k] / self._drawcount[k] if self._drawcount[k] > 0 else 0.,  # avg - average time per draw
+            self._drawtimes[k],                        # total - total time spent drawing 
+            self._drawcount[k],                        # count - number of times drawn 
+            str(k),                                    # name - name of artist 
+            self._drawtypes[k],                        # type - type of artist
+        ) for k in self._drawtimes.keys()]
+        total_pc = 0    
+        for avg, total, count, name, type in sorted(drawinfo, key=lambda x: x[1], reverse=True):
+            pc = 100.0*total/total_time
+            total_pc += pc
+            if count > 0:
+                print('draw_animated  %5d | %7.2f %4.1f%% %4.0f%% | %7.2f | %10s | %s' % (
+                    count, total, pc, total_pc, avg, type, name), file=sys.stderr) 
+
+
 # Draw Animated with Blitting
 # This class is used to draw animated artists on a matplotlib axes using blitting.
 # It is designed to be used in a loop, where each iteration of the loop will draw
@@ -36,6 +87,7 @@ class DrawAnimated:
         DONE = 8
         CLOSED = 9
         RESET = 10
+        WAITING = 11
 
 
     def xprint(self, msg, always=False):
@@ -53,22 +105,33 @@ class DrawAnimated:
         self._mpl_connect = []
         self.draw_state = self.DrawState.CREATED
         self.blit_times = []
-        self.static_draws = self.dynamic_draws = 0
+        self.static_draws = self.dynamic_draws = self.avg_static_draws = self.avg_dynamic_draws = 0
         self.first = True
+        self._fps = 0
+        self.drawtimes = DrawTimes()
 
     def reset(self, info, ):
         self.xprint('', )
-        self.xprint('reset %s reset bg_static ------------------' % (info), always=False )
+        if self.draw_state == self.DrawState.WAITING:
+            return
         self.draw_state = self.DrawState.RESET
         self._bg_static = None
+        self.xprint('%s reset bg_static ------------------ %s' % (info, self.draw_state), always=True )
 
     def _on_resize(self, event):
         self._bg_base = self._bg_static = None
-        self.reset('on_resize')
+        self.draw_state = self.DrawState.WAITING
+        self.xprint('', )
+        self.xprint('reset resize_event reset bg_base bg_static ------------------ %s' % (self.draw_state), always=True )
+        #self.reset('on_resize')
 
     def _on_draw_event(self, event):
         #self.reset('on_draw_event')
-        pass
+        self.draw_state = self.DrawState.RESET
+        self._bg_static = None
+        self.xprint('', )
+        self.xprint('reset draw_event reset bg_static ------------------ %s' % (self.draw_state), always=True )
+        #pass
 
     def open(self, xaxis_dynamic=False, yaxis_dynamic=False, extra_static_artists=[], debug=False, ):
         self.draw_state = self.DrawState.OPEN
@@ -84,7 +147,7 @@ class DrawAnimated:
             pass
         self._mpl_connect = []
 
-        self.fig._bg_base = self._bg_static = None
+        self.bg_base = self.static = None
         self._mpl_connect.append(self.fig.canvas.mpl_connect('resize_event', self._on_resize))
         self._mpl_connect.append(self.fig.canvas.mpl_connect('draw_event', self._on_draw_event))
 
@@ -134,8 +197,10 @@ class DrawAnimated:
     # draw - do the next step of the animation
     def draw(self, flush_events=False, ):
 
+        self.xprint(f"draw: draw_state: {self.draw_state}", always=True,)
+        if self.draw_state == self.DrawState.WAITING:
+            return 'waiting', None, self.draw_state.name
 
-        self.xprint(f"draw: draw_state: {self.draw_state}", )
         if self.draw_state in [self.DrawState.START, self.DrawState.STATIC, self.DrawState.DYNAMIC, ]: 
 
             # Get the list of animated artists that are currently visible, this needs to be done
@@ -191,6 +256,7 @@ class DrawAnimated:
         # or can just draw the dynamic artists
         if self.draw_state == self.DrawState.START:
 
+            self.dynamic_draws = self.static_draws = 0
             # if we don't have a static background, save the base and draw the static artists
             if self._bg_base is None:
                 self.xprint('reset bg_base: %s bg_static: %s' % (self._bg_base, self._bg_static), always=False)
@@ -199,7 +265,7 @@ class DrawAnimated:
                 self.draw_state = self.DrawState.STATIC
                 #sleep(6)
                 self.xprint('', )
-                self.xprint('bg_base = copy_from_bbox <<<<<<<<<<<<<<<<', always=False)
+                self.xprint('bg_base = copy_from_bbox <<<<<<<<<<<<<<<<', always=True)
                 self.xprint('', )
                 return 'bg_base = copy_from_bbox', None, self.draw_state.name
             
@@ -209,13 +275,13 @@ class DrawAnimated:
                 # save the background
                 self.draw_state = self.DrawState.STATIC
                 self.fig.canvas.restore_region(self._bg_base)
-                self.xprint('restore_region bg_base <<<<<<<<<<<<<<<<', always=False)
+                self.xprint('restore_region bg_base <<<<<<<<<<<<<<<< STATIC', always=True)
                 return 'restore_region bg_base', None, self.draw_state.name
             
             # if we have a static background, then we need to restore it and draw the dynamic artists
             self.fig.canvas.restore_region(self._bg_static)
             self.draw_state = self.DrawState.DYNAMIC
-            self.xprint('restore_region bg_static <<<<<<<<<<<<<<<<', always=False)
+            self.xprint('restore_region bg_static <<<<<<<<<<<<<<<< DYNAMIC', always=True)
             return 'restore_region bg_static', None, self.draw_state.name
     
         # STATIC - draw the static artist and then save the background
@@ -227,7 +293,8 @@ class DrawAnimated:
                 return artist, 'static', self.draw_state.name
 
             self._bg_static = self.fig.figure.canvas.copy_from_bbox(self.fig.figure.bbox)
-            self.xprint('bg_static = copy_from_bbox <<<<<<<<<<<<<<<<', always=False)
+            self.xprint('static_draws: %s' % (self.static_draws, ), always=True)
+            self.xprint('bg_static = copy_from_bbox <<<<<<<<<<<<<<<<', always=True)
 
             self.draw_state = self.DrawState.DYNAMIC
             return 'bg_static = copy_from_bbox', None, self.draw_state.name
@@ -240,6 +307,7 @@ class DrawAnimated:
                 self.dynamic_draws += 1
                 return artist, 'dynamic', self.draw_state.name
             self.draw_state = self.DrawState.BLIT
+            self.xprint('dynamic_draws: %s' % (self.dynamic_draws, ), always=True)
             return 'dynamic', None, self.draw_state.name
 
         # BLIT - blit the canvas
@@ -258,8 +326,9 @@ class DrawAnimated:
             self.blit_times = blit_times
             elapsed = self.blit_times[-1][0] - self.blit_times[0][0]
             self._fps = len(self.blit_times) / elapsed if elapsed > 0. else 0.
-            self._avg_static_draws = sum([t[1] for t in self.blit_times]) / len(self.blit_times)
-            self._avg_dynamic_draws = sum([t[2] for t in self.blit_times]) / len(self.blit_times)
+            self.avg_static_draws = sum([t[1] for t in self.blit_times]) / len(self.blit_times)
+            self.avg_dynamic_draws = sum([t[2] for t in self.blit_times]) / len(self.blit_times)
+            self.xprint('static_draws: %s dynamic_draws: %s' % (self.static_draws, self.dynamic_draws, ), always=True)
             self.xprint('cleanup bg_base: %s bg_static: %s' % (self._bg_base, self._bg_static), always=False)
             return 'cleanup', None, self.draw_state.name
 
@@ -273,54 +342,23 @@ class DrawAnimated:
             self.draw_state = self.DrawState.START
             return None, None, self.draw_state.name
 
-class DrawTimes:
-    def __init__(self,):
-        self._drawtimes = {}
-        self._drawcount = {}
-        self._drawlast = {}
-        self._drawtypes = {}
-        self.t0 = None
-        self.name = None
-        self.type = None
+    def draw_loop(self, pause_time=0.01, sleep_time=0.001, ):
+        elapsed = 0
+        while True:
+            with self.drawtimes as dt:
+                dt.name, dt.type, next_state = self.draw(flush_events=True)
+            #print('draw: %s %s %s' % (dt.name, dt.type, next_state), file=sys.stderr)
+            if dt.name is None:
+                return
+            elapsed += self.drawtimes.elapsed
+            if elapsed < pause_time:
+                continue
+            elapsed = 0
+            sleep(sleep_time)
 
-    def __enter__(self):
-        self.t0 = perf_counter()
-        self.name = None
-        return self
-
-
-    def __exit__(self, type, value, traceback):
-        if self.name is None:
-            return
-        t1 = perf_counter()
-        self.elapsed = t1 - self.t0
-        if self.name not in self._drawtimes:
-            self._drawtimes[self.name] = self._drawlast[self.name] = 0. 
-            self._drawcount[self.name] = 0
-            self._drawtypes[self.name] = None
-        self._drawtimes[self.name] += self.elapsed
-        self._drawlast[self.name] = t1
-        self._drawcount[self.name] += 1
-        self._drawtypes[self.name] = self.type
-        
     def print_summary(self,):
-        # show draw times
-        total_time = sum(self._drawtimes.values())
-        print('draw_animated total time: %7.2f' % (total_time), file=sys.stderr)
-        drawinfo = [(
-            self._drawtimes[k] / self._drawcount[k] if self._drawcount[k] > 0 else 0.,  # avg - average time per draw
-            self._drawtimes[k],                        # total - total time spent drawing 
-            self._drawcount[k],                        # count - number of times drawn 
-            str(k),                                    # name - name of artist 
-            self._drawtypes[k],                        # type - type of artist
-        ) for k in self._drawtimes.keys()]
-        total_pc = 0    
-        for avg, total, count, name, type in sorted(drawinfo, key=lambda x: x[1], reverse=True):
-            pc = 100.0*total/total_time
-            total_pc += pc
-            if count > 0:
-                print('draw_animated  %5d | %7.2f %4.1f%% %4.0f%% | %7.2f | %10s | %s' % (
-                    count, total, pc, total_pc, avg, type, name), file=sys.stderr) 
+        self.drawtimes.print_summary()
+
 
 # ########################################################################################################
 
@@ -368,8 +406,8 @@ if __name__ == "__main__":
 
 
     # make sure our window is on the screen and drawn
-    plt.show(block=False)
-    plt.pause(0.001)
+    fig.show()
+    #plt.pause(0.001)
 
     start_time = time()
     frame_count = 0
@@ -417,25 +455,13 @@ if __name__ == "__main__":
             drawanimated.reset('main')
 
         # update, this is a loop so GUI can process events
-        elapsed = 0
-        while True:
-            with drawtimes as dt:
-                dt.name, dt.type, next_state = drawanimated.draw(flush_events=True)
-            print('draw: %s %s %s' % (dt.name, dt.type, next_state), file=sys.stderr)
-            if dt.name is None:
-                break
-            elapsed += drawtimes.elapsed
-            if elapsed < 0.01:
-                continue
-            elapsed = 0
-            sleep(.001)
-
+        drawanimated.draw_loop(pause_time=0.01, sleep_time=0.001, )
         frame_count += 1
         fig.canvas.flush_events()
         sleep(.0001)
 
     drawanimated.close()
 
-    drawtimes.print_summary()
+    drawanimated.print_summary()
 
 

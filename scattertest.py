@@ -27,7 +27,7 @@ from drawanim import DrawAnimated, DrawTimes
 
 if __name__ == '__main__':
 
-    plt.ion()
+    plt.ioff()
     fig, ax = plt.subplots()
     sample_x = range(1000,12000,100)
     sample_y = random.sample(range(110),110)
@@ -35,14 +35,14 @@ if __name__ == '__main__':
     # setup draw_animated, and set all of the artists to animated, including the axes, spines, and title.
     drawanimated = DrawAnimated(fig, )
     drawanimated.open(xaxis_dynamic=False, yaxis_dynamic=False, extra_static_artists=[], debug=False, )
-    drawtimes = DrawTimes()
     drawanimated.animate_chrome(ax, name='scatter', title='Scatter Plot', )
 
     # create scatter plot, set animated=True 
     sc = ax.scatter([],[], color='black', animated=True)
 
     # draw the initial plot, effectively just a blank plot
-    plt.draw()
+    fig.show()
+    #plt.pause(0.001)
 
     # iterate across the data incrementally updating the plot
     last_xlims = last_ylims = None
@@ -89,16 +89,7 @@ if __name__ == '__main__':
             lims_changed += 1
 
         # incrementally draw the plot
-        elapsed = 0
-        while True:
-            with drawtimes as dt:
-                dt.name, dt.type, next_state = drawanimated.draw(flush_events=True)
-            if dt.name is None:
-                break
-            elapsed += drawtimes.elapsed
-            if elapsed < 0.01:
-                continue
-            time.sleep(.0001)
+        drawanimated.draw_loop(pause_time=0.01, sleep_time=0.001)
 
         fps.append(1/(time.perf_counter()-t1))
         #print('Mean Frame Rate: %.3gFPS' % (1/(time.perf_counter()-t1)), file=sys.stderr)
@@ -106,5 +97,5 @@ if __name__ == '__main__':
     print('Mean FPS: %.3gFPS' % np.mean(fps), file=sys.stderr)
     print('lims_changed: %d' % lims_changed, file=sys.stderr)
     drawanimated.close()
-    drawtimes.print_summary()
+    drawanimated.print_summary()
 
