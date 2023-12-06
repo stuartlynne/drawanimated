@@ -1,4 +1,4 @@
-# Matplotlib - Draw Animated with Incremental Blitting
+# Matplotlib - Draw Animated with Staged Incremental Blitting
 # Tue Nov 28 08:20:24 AM PST 2023
 
 
@@ -13,18 +13,75 @@ If you chart needs to have dynamic axis limits you then need to animate the appr
 X and/or Y Axis and performance drops significantly. Rendering the ticks and labels
 is by comparison very expensive.
 
-This project shows how to use two *incremental blitting* approachs. We assume that
-the chart data updates frequently, with periodic updates to the axes, legends and 
-title. The static data only needs to be redrawn when changed, the dynamic data
-is updated continuously.
+This project shows how to use two approaches to improving animations. 
+There are two types of chart artists: static and dynamic. The static data only needs to 
+be redrawn when changed, the dynamic data is updated continuously.
+
+ - Static data typically would include the X/Y axes, spines, legends and titles. 
+ - Dynamic data updates frequently, this would normally be the lines and plots.
 
 The second problem with Matplotlib is the latency of drawing complex plots. If
 the time used for drawing exceeds about 100ms that stalls the GUI event processing
 and makes the use of the surrounding program difficult as interactions with the 
 GUI are slow or delayed.
 
-This projects uses a second *incremental* approach to rendering by limiting the 
+This projects uses a staged approach to rendering by limiting the 
 time spent drawing to about 10ms before allowing the GUI to process events.
+
+## Incremental Drawing
+
+The typical approach to animation using Matplotlib is to defined all of the artists
+required setting some of them to be animated.
+
+Then:
+ - draw the non-animated artists
+ - save the drawing
+ - loop
+   - restore the drawing 
+   - draw the animated artists
+   - blit the result
+
+If you have expensive artists that are need be animated (e.g. ticks, labels, legends, annotations)
+this can result in slow frame rates. If some of the expensive artists only need to be redrawn
+periodically (e.g. x/y limit change) then not rendering them continuously is a win.
+
+
+Then:
+ - draw the non-animated artists
+ - save the base drawing
+ - loop 
+   - restore the base drawing 
+   - draw the static animated artists
+     - save the static background
+     - loop until reset
+       - draw the dynamic artists
+       - blit the result
+
+For simple line or scatter plots animation of the X/Y axis ticks and labels etc can amount
+to 70-80% of the drawing time. Only doing the remaining 20-30% can improve FPS dramatically.
+
+
+## Staged Drawing
+
+Complex plots with many dozens of static and dynamic artists can take a long time to draw.
+If done without a break the surrounding GUI will become unresponsive.
+
+This library implements a simple state machine that allows each of the operations (drawing,
+blitting, etc) to be done separately. Allowing the caller to arrange for the GUI to run
+and process its events.
+
+```
+elapsed = 0
+while True:
+    t1 = perf_count()
+    name, type, next = drawanimated.draw(flushevents=True)
+    if name is None:
+        break
+    elapsed += perf_count() - t1
+    if elapsed < 0.01
+        continue
+```
+
 
 ## Sample Code
 
@@ -40,48 +97,6 @@ approach we can see about 30fps (Linux).
 
 
 
-## Incremental Drawing of Static versus Dynamic Artists
-
-The approach taken is to look at the artists in the figure and separate into two lists:
-
-- static - XAxis, YAxis, Legends, Spines, title, _left_title, _right_title
-- dynamic - everything else
-
-The algorithm for drawing is:
-
-1. save a copy of the non-animated background if not already done or restore the non-animated background 
-2. draw the static artists and save or restore the static background 
-3. draw the dynamic artists and blit
-
-## Incremental Drawing for Latency
-
-The draw_animated() function is called to do the drawing. It is designed to be
-called in a loop and it will only do a small amount of work for each call. 
-
-The function returns a tuple (msg, times).
-
-- msg - what was just done OR None if finished blitting
-- times - for artists drawn contains the average draw time and number of times drawn
-
-The caller can arrange to call draw_animated() as many times as required with
-GUI processing allowed when enough time has elapsed:
-
-```
-    # call draw_animated until msg is None, 
-    # sleep to all GUI when elapsed time exceeds 10ms
-    while True:
-        msg, draw_time = draw_animated(fig, flush_events=True)
-        if msg is None:
-            break
-        if draw_time is None:
-            continue
-        elapsed += draw_time[0]
-        if elapsed < 0.01:
-            continue
-        elapsed = 0
-        sleep(.0001)
-
-```
 
 
 ## Sample Times
@@ -94,8 +109,6 @@ range from 6 to 10 milliseconds for drawing. But the number of times these are d
 is much less than the dynamic data.
 
 By comparison all of the dynamic artists are about 1 millisecond or less. 
-
-
 
 ```
  Count|   Total(ms)         | Avg(ms) | Artist

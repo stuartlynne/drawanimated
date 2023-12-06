@@ -46,7 +46,7 @@ class DrawAnimated:
     def __init__(self, fig, ):
         self.fig = fig
         self.debug = False
-        self.xprint('fig: %s' % (id(fig)), always=True)
+        self.xprint('fig: %s' % (id(fig)), always=False)
         self._bg_base = self._bg_static = None
         self.debug = False
         self.current_animated_artists = []
@@ -97,12 +97,10 @@ class DrawAnimated:
     def animate_chrome(self, ax, name='', title='', ):
         # animate the title, the axes and the spines
         ax.set_title(title, animated=True, )
-        #print('animate_chrome: _axis_map: %s' % (ax._axis_map), file=sys.stderr, )
         for n, a in ax._axis_map.items():
             a.set_animated(True)
             a.set_label(f"{name}-{n}axis")
             a._label = f"{name}-{n}axis"
-            print('animate_chrome: %s %s id(%s) %s' % (name, n, id(a), a), file=sys.stderr, )
         for n, s in ax.spines.items():
             s.set_animated(True)
             s.set_label(f"{name}-{n}-spine")
@@ -326,6 +324,8 @@ class DrawTimes:
 
 # ########################################################################################################
 
+# an example of using DrawAnimated to animate a matplotlib plot
+#
 if __name__ == "__main__":
 
     print('matplotlib version: %s' % (matplotlib.__version__), )
@@ -345,9 +345,7 @@ if __name__ == "__main__":
     drawtimes = DrawTimes()
 
     for name, ax in axes_dict.items():
-
         drawanimated.animate_chrome(ax, name=name, title=f"Draw Animated Incremental {name}", )
-
         # create the 4 line plots
         x = np.linspace(0, 2 * np.pi, 100)
         for c in colors:
