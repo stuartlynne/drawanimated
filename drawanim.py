@@ -124,7 +124,8 @@ class DrawAnimated:
 
     def _on_resize(self, event):
         self._bg_base = self._bg_static = None
-        self.draw_state = self.DrawState.WAITING
+        if self.draw_state != self.DrawState.START:
+            self.draw_state = self.DrawState.WAITING
         self.wait_count = 0
         self.xprint('', )
         self.xprint('reset resize_event reset bg_base bg_static ------------------ %s' % (self.draw_state), always=False )
@@ -140,6 +141,12 @@ class DrawAnimated:
 
     def _on_close_event(self, event):
         pass
+
+    def add_static_artists(self, artists):
+        self.extra_static_artists += artists
+
+    def add_static_artist(self, artist):
+        self.extra_static_artists.append(artist)
 
     def open(self, xaxis_dynamic=False, yaxis_dynamic=False, extra_static_artists=[], debug=False, name=None, ):
         self.draw_state = self.DrawState.OPEN
@@ -166,6 +173,7 @@ class DrawAnimated:
         for e in self._mpl_connect:
             self.fig.figure.canvas.mpl_disconnect(e)
         self._mpl_connect = []
+        self.extra_static_artists = []
 
     # animate_chrome - helper function to animate the chrome of the axes
     def animate_chrome(self, ax, name='', title=None, set_label=True, ):
@@ -179,6 +187,8 @@ class DrawAnimated:
         for n, s in ax.spines.items():
             s.set_animated(True)
             s.set_label(f"{name}-{n}-spine")
+        ax.patch.set_animated(True)
+        #ax.patch.set_alpha(0.2)
 
     # get_label - helper function to get the label of an artist, needed to handle XAxis and YAxis
     def get_label(self, a):
@@ -221,16 +231,20 @@ class DrawAnimated:
             # are ignored until the next cycle of drawing is started, but removed artists are 
             # immediately ignored.
             # N.b. There may be other artists for other types of plots, this code works in my use case. 
+            # N.b. Patch objects need to be drawn before the other static artists, do we need dynamic patches?
             # YMMV.
             static_dict = {}
             dynamic_dict = {}
+            patch_dict = {}
             for axes in self.fig.get_children():
                 #self.xprint(f"draw: axes: {axes.get_label()}", )
                 if type(axes) is plt.Axes:
                     for a in axes.get_children():
                         #self.xprint(f"draw: a: {a.get_label()} animated: {a.get_animated()} visible: {a.get_visible()}", )
                         if a.get_animated() and a.get_visible():
-                            if a in self.extra_static_artists:
+                            if a in [axes.patch,]:
+                                patch_dict[id(a)] = a
+                            elif a in self.extra_static_artists:
                                 static_dict[id(a)] = a
                             elif (type(a) is XAxis and not self.xaxis_dynamic) or (type(a) is YAxis and not self.yaxis_dynamic) or type(a) is Legend or type(a) is Spine:
                                 static_dict[id(a)] = a
@@ -240,8 +254,8 @@ class DrawAnimated:
                                 dynamic_dict[id(a)] = a
 
             #static_animated_artists = [a for a in static_dict.values()] if fig._bg_static is None else []
-            static_animated_artists = [a for a in static_dict.values()] 
-            dynamic_animated_artists = [a for a in dynamic_dict.values()]
+            static_animated_artists = [a for a in patch_dict.values()] + [a for a in static_dict.values()] 
+            dynamic_animated_artists = [ a for a in dynamic_dict.values()]
             current_animated_artists = static_animated_artists + dynamic_animated_artists
             self.static_artists = len(static_animated_artists) 
             self.dynamic_artists = len(dynamic_animated_artists) 
@@ -415,110 +429,104 @@ if __name__ == "__main__":
     print('matplotlib version: %s' % (matplotlib.__version__), )
     print('matplotlib backend: %s' % (matplotlib.get_backend()), )
 
+    # create a mosaic 2 x 2 grid of subplots, 
+    fig, axes_dict = plt.subplot_mosaic([['a', 'b'], ['c', 'd']], constrained_layout=True, figsize=(8, 8))
 
     # setup 4 lines and 2 annotations on each subplot axes, ensure everything is animated
+    lines = {n: {} for n in axes_dict.keys()}
+    annotations = { a: {'frame_number': None, 'fps': None} for a in axes_dict.keys()}
+    legends = {n: None for n in axes_dict.keys()}
+    colors = ['red', 'blue', 'green', 'brown']
 
-    range_count = 200
+    drawanimated = DrawAnimated(fig, )
+    drawanimated.open(xaxis_dynamic=False, yaxis_dynamic=False, extra_static_artists=[], debug=False, name='test', )
+    drawtimes = DrawTimes()
 
-    for force in [False, True]:
-        # create a mosaic 2 x 2 grid of subplots, 
-        fig, axes_dict = plt.subplot_mosaic([['a', 'b'], ['c', 'd']], constrained_layout=True, figsize=(8, 8))
-        lines = {n: {} for n in axes_dict.keys()}
-        annotations = { a: {'frame_number': None, 'fps': None} for a in axes_dict.keys()}
-        legends = {n: None for n in axes_dict.keys()}
-        colors = ['red', 'blue', 'green', 'brown']
-        drawanimated = DrawAnimated(fig, )
-        drawanimated.open(xaxis_dynamic=False, yaxis_dynamic=False, extra_static_artists=[], debug=False, name='test', )
-        drawtimes = DrawTimes()
-        for name, ax in axes_dict.items():
-            if force:
-                drawanimated.animate_chrome(ax, name=name, title=f"Animated Non-Incremental {name}", )
-                ax.set_title(f"Animated Non-Incremental {name}")
-            else:
-                drawanimated.animate_chrome(ax, name=name, title=f"Animated Incremental {name}", )
-                ax.set_title(f"Animated Incremental {name}")
-            # create the 4 line plots
-            x = np.linspace(0, 2 * np.pi, 100)
-            for c in colors:
-                line, = ax.plot(x, np.sin(x), animated=True, label=f"{name}-{c}", color=c, )
-                lines[name][c] = line
+    for name, ax in axes_dict.items():
+        drawanimated.animate_chrome(ax, name=name, title=f"Draw Animated Incremental {name}", )
+        # create the 4 line plots
+        x = np.linspace(0, 2 * np.pi, 100)
+        for c in colors:
+            line, = ax.plot(x, np.sin(x), animated=True, label=f"{name}-{c}", color=c, )
+            lines[name][c] = line
 
-            # create the 2 annotations
-            for annotation, xytext in [('frame_number', (10, -10)), ('fps', (200, -10))]:
-                annotations[name][annotation] = ax.annotate( 
-                    annotation, (0, 1), xycoords="axes fraction", xytext=xytext, 
-                    textcoords="offset points", ha="left", va="top", label=f"{annotation}-an", 
-                    animated=True, )
+        # create the 2 annotations
+        for annotation, xytext in [('frame_number', (10, -10)), ('fps', (200, -10))]:
+            annotations[name][annotation] = ax.annotate( 
+                annotation, (0, 1), xycoords="axes fraction", xytext=xytext, 
+                textcoords="offset points", ha="left", va="top", label=f"{annotation}-an", 
+                animated=True, )
 
-            # create the legend, note that the ax.legend call does not take the animated parameter, 
-            # need to set it explicitly
-            leg = ax.legend(handles=lines[name].values(), loc='lower right', )
-            leg.set_animated(True)
-            leg.set_label('legend')
-            legends[name] = leg
+        # create the legend, note that the ax.legend call does not take the animated parameter, 
+        # need to set it explicitly
+        leg = ax.legend(handles=lines[name].values(), loc='lower right', )
+        leg.set_animated(True)
+        leg.set_label('legend')
+        legends[name] = leg
 
 
-        # make sure our window is on the screen and drawn
-        fig.show()
-        #plt.pause(0.001)
+    # make sure our window is on the screen and drawn
+    fig.show()
+    #plt.pause(0.001)
 
-        start_time = time()
-        frame_count = 0
-        divisor = 100
-        multiplier = 1
-        resets = 0 
-        reset = False
+    start_time = time()
+    frame_count = 0
+    divisor = 100
+    multiplier = 1
+    resets = 0 
+    reset = False
+    force = False
+    for j in range(500):
+
+        if j % 80 == 0:
+            multiplier *= 1.2
         
-        for j in range(range_count):
+        for i, (name, ax) in enumerate(axes_dict.items()):
+            ymin = []
+            ymax = []
+            for k, (color, line) in enumerate(lines[name].items()):
+                offset = k * 10
+                ydata = np.sin(x + offset + (j / divisor) * np.pi / (k+1)) * multiplier 
+                ymin.append(min(ydata))
+                ymax.append(max(ydata))
+                line.set_ydata(ydata)
+            annotations[name]['frame_number'].set_text("frame: %d" % (frame_count,))
+            elapsed = time() - start_time
+            if elapsed > 0:
+                annotations[name]['fps'].set_text("fps: %3.1f" % (frame_count / elapsed))
 
-            if j % 20 == 0:
-                multiplier *= 1.2
-            
-            for i, (name, ax) in enumerate(axes_dict.items()):
-                ymin = []
-                ymax = []
-                for k, (color, line) in enumerate(lines[name].items()):
-                    offset = k * 10
-                    ydata = np.sin(x + offset + (j / divisor) * np.pi / (k+1)) * multiplier 
-                    ymin.append(min(ydata))
-                    ymax.append(max(ydata))
-                    line.set_ydata(ydata)
-                annotations[name]['frame_number'].set_text("frame: %d" % (frame_count,))
-                elapsed = time() - start_time
-                if elapsed > 0:
-                    annotations[name]['fps'].set_text("fps: %3.1f" % (frame_count / elapsed))
+            if j % 80 == 0:
 
-                if j % 20 == 0:
+                min_y = min(ymin)
+                max_y = max(ymax)
+                ylims = ax.get_ylim()
 
-                    min_y = min(ymin)
-                    max_y = max(ymax)
-                    ylims = ax.get_ylim()
+                if min_y < ylims[0] or max_y > ylims[1]:
+                    ax.set_ylim(min_y, max_y)
+                    ax.set_ylim(min_y, max_y)
+                    ax.set_xlim(0, 2 * np.pi)
+                    reset = True
+                #ax.patch.set_alpha(0.2)
+                ax.set_facecolor('white' if j % 160 == 0 else 'grey')
+                
 
-                    if min_y < ylims[0] or max_y > ylims[1]:
-                        ax.set_ylim(min_y, max_y)
-                        ax.set_ylim(min_y, max_y)
-                        ax.set_xlim(0, 2 * np.pi)
-                        reset = True
+        if force or  reset:
+            resets += 1
+            reset = False
+            for name, ax in axes_dict.items():
+                ax.set_title(f"Draw Animated Incremental {name} {resets}")
+            #self._draw_reset = True
+            drawanimated.reset('main')
 
-            if force or  reset:
-                resets += 1
-                reset = False
-                for name, ax in axes_dict.items():
-                    if force:
-                        ax.set_title(f"Draw Animated Non-Incremental {name} {resets}")
-                    else:
-                        ax.set_title(f"Draw Animated Incremental {name} {resets}")
-                #self._draw_reset = True
-                drawanimated.reset('main')
+        # update, this is a loop so GUI can process events
+        drawanimated.draw_loop(pause_time=0.01, sleep_time=0.001 )
+        frame_count += 1
+        fig.canvas.flush_events()
+        print('frame: %d' % (frame_count,), file=sys.stderr) 
+        sleep(.0001)
 
-            # update, this is a loop so GUI can process events
-            drawanimated.draw_loop(pause_time=0.01, sleep_time=0.001 )
-            frame_count += 1
-            fig.canvas.flush_events()
-            print('frame: %d' % (frame_count,), file=sys.stderr) 
-            sleep(.0001)
+    drawanimated.close()
 
-        drawanimated.close()
-        drawanimated.print_summary()
+    drawanimated.print_summary()
 
 
